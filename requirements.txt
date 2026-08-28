@@ -1,0 +1,11 @@
+Flask
+flask-cors
+gTTS
+numpy
+scipy
+librosa
+soundfile
+torch
+transformers
+jiwer
+gunicorn
