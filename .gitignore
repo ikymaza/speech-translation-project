@@ -12,6 +12,8 @@ downloads/
 .env
 model/whisper_finetuned/model.safetensors
 data/common_voice_id/
+data/acoustic_anchor_subset/
+data/acoustic_anchor_subset_en/
 data/prepared/metadata.csv
 data/prepared/queries_metadata.csv
 data/translations.csv
