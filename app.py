@@ -465,10 +465,15 @@ def _translate_text(
 
         # Marian menerjemahkan pertanyaan ini secara harfiah,
         # padahal bentuk percakapan Indonesianya adalah idiom khusus.
-        if re.search(
-            r"\bwhich platform is (it|the train)\b",
-            sentence,
-            flags=re.IGNORECASE,
+        # PENTING: pakai fullmatch (bukan search) pada kalimat yang sudah
+        # dinormalisasi, supaya patch ini HANYA berlaku kalau kalimatnya
+        # memang cuma pertanyaan pendek ini saja — bukan saat frasa ini
+        # nyempil di tengah kalimat yang lebih panjang (yang sebelumnya
+        # bikin sisa kalimat ikut terhapus/tertimpa).
+        normalized_sentence = sentence.strip().rstrip("?.!").lower()
+        if re.fullmatch(
+            r"which platform is (it|the train)",
+            normalized_sentence,
         ):
             translated = "Peron berapa?"
 
