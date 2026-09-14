@@ -1,12 +1,9 @@
 let mediaRecorder;
 let audioChunks = [];
 let isRecording = false;
-let currentDirection = "id-en";
 let activeRecordButton = null;
 let activeStatusElement = null;
 
-const recordBtn = document.getElementById("recordBtn");
-const statusEl = document.getElementById("status");
 const errorBox = document.getElementById("errorBox");
 const audioPlayer = document.getElementById("audioPlayer");
 const listenBtn = document.getElementById("listenBtn");
@@ -19,18 +16,6 @@ function showError(message) {
 }
 
 function clearError() { errorBox.classList.remove("visible"); }
-
-function updateDirection() {
-    const isIdToEn = currentDirection === "id-en";
-    setText("sourceLabel", isIdToEn ? "Bahasa Indonesia" : "English");
-    setText("targetLabel", isIdToEn ? "English" : "Bahasa Indonesia");
-}
-
-document.getElementById("swapBtn").addEventListener("click", () => {
-    currentDirection = currentDirection === "id-en" ? "en-id" : "id-en";
-    updateDirection();
-    document.querySelectorAll(".language").forEach((button, index) => button.classList.toggle("active", index === (currentDirection === "id-en" ? 0 : 1)));
-});
 
 listenBtn.addEventListener("click", () => audioPlayer.play());
 
@@ -75,12 +60,6 @@ function stopRecording() {
     activeStatusElement.textContent = "Memproses...";
 }
 
-recordBtn.dataset.originalLabel = "Mulai rekam";
-recordBtn.addEventListener("click", () => {
-    if (isRecording) stopRecording();
-    else startRecording(recordBtn, currentDirection, statusEl);
-});
-
 const conversationRecordBtn = document.getElementById("conversationRecordBtn");
 const conversationStatus = document.getElementById("conversationStatus");
 const conversationSpeakerLabel = document.getElementById("conversationSpeakerLabel");
@@ -113,23 +92,7 @@ function setConversationLanguage(direction) {
     document.querySelectorAll(".conversation-language").forEach((button) => button.classList.toggle("active", button.dataset.direction === direction));
 }
 
-document.getElementById("translateModeBtn").addEventListener("click", () => {
-    document.getElementById("translateModeBtn").classList.add("active");
-    document.getElementById("conversationModeBtn").classList.remove("active");
-    document.querySelector(".translate-grid").style.display = "grid";
-    document.querySelector(".language-bar").style.display = "flex";
-    document.getElementById("conversationBox").classList.remove("visible");
-});
-
-document.getElementById("conversationModeBtn").addEventListener("click", () => {
-    document.getElementById("conversationModeBtn").classList.add("active");
-    document.getElementById("translateModeBtn").classList.remove("active");
-    document.querySelector(".translate-grid").style.display = "none";
-    document.querySelector(".language-bar").style.display = "none";
-    document.getElementById("conversationBox").classList.add("visible");
-});
-
-async function sendAudioToServer(direction, statusElement = statusEl, button = recordBtn) {
+async function sendAudioToServer(direction, statusElement, button) {
     const audioBlob = new Blob(audioChunks, { type: "audio/wav" });
     const formData = new FormData();
     formData.append("audio", audioBlob, "recording.wav");
@@ -143,12 +106,7 @@ async function sendAudioToServer(direction, statusElement = statusEl, button = r
 
         const sourceText = direction === "id-en" ? data.id_text : data.en_text;
         const targetText = direction === "id-en" ? data.en_text : data.id_text;
-        const sourceEl = document.getElementById("idText");
-        const targetEl = document.getElementById("enText");
-        sourceEl.textContent = sourceText || "Tidak ada ucapan yang terdeteksi";
-        targetEl.textContent = targetText || "Terjemahan kosong";
-        sourceEl.classList.remove("empty");
-        targetEl.classList.remove("empty");
+
         audioPlayer.src = data.audio_url;
         listenBtn.classList.add("visible");
 
@@ -167,10 +125,9 @@ async function sendAudioToServer(direction, statusElement = statusEl, button = r
         setText("ndtwValue", `${b.ndtw_only_sec}s`);
         setText("scoreState", "Pengukuran terakhir selesai");
         statusElement.textContent = "Selesai.";
-        if (button.classList.contains("conversation-record")) {
-            appendConversationTurn(direction, sourceText, targetText);
-            setConversationLanguage(direction === "id-en" ? "en-id" : "id-en");
-        }
+
+        appendConversationTurn(direction, sourceText, targetText);
+        setConversationLanguage(direction === "id-en" ? "en-id" : "id-en");
     } catch (err) {
         showError(err.message);
         statusElement.textContent = "Pemrosesan gagal.";

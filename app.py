@@ -15,7 +15,8 @@ Whisper Fine-tuned           Wav2Vec2
 ASR                          Feature Extraction
   |                              |
   v                              v
-MarianMT                    Adaptive NDTW
+Google Translate             Adaptive NDTW
+(deep-translator)
   |                              |
   v                              v
 Teks Terjemahan              Statistik Teknis
@@ -27,6 +28,8 @@ Catatan:
 - Whisper menghasilkan teks yang ditampilkan kepada pengguna.
 - Wav2Vec2 + NDTW hanya digunakan untuk statistik/analisis teknis.
 - NDTW TIDAK mengubah hasil Whisper.
+- Penerjemahan pakai Google Translate (via deep-translator, tanpa API
+  key) - MarianMT lokal sudah tidak dipakai lagi.
 """
 
 import sys
@@ -280,10 +283,17 @@ print()
 
 
 # ============================================================
-# 2. MARIANMT
+# 2. MARIANMT (CADANGAN DARURAT — bukan mesin utama)
 # ============================================================
+#
+# Mesin utama penerjemahan tetap Google Translate (deep-translator).
+# MarianMT dimuat di sini HANYA sebagai jaring pengaman kalau
+# GoogleTranslator dan MyMemoryTranslator dua-duanya gagal (mis. tidak
+# ada internet sama sekali saat demo/sidang). Kualitasnya untuk nama
+# tempat/entitas lebih lemah dibanding Google Translate, tapi tidak
+# pernah gagal karena berjalan 100% lokal tanpa internet.
 
-print("[2/3] Memuat MarianMT...")
+print("[2/3] Memuat MarianMT (cadangan darurat)...")
 
 
 print(
@@ -325,7 +335,7 @@ mt_model_en_id.eval()
 
 
 print(
-    "[2/3] MarianMT selesai."
+    "[2/3] MarianMT (cadangan darurat) selesai."
 )
 
 print()
@@ -399,8 +409,63 @@ print()
 
 
 # ============================================================
-# TRANSLATION
+# TRANSLATION — 3 lapis fallback
 # ============================================================
+#
+# Lapis 1: GoogleTranslator (deep-translator, tanpa API key) - kualitas
+#          terbaik, termasuk soal nama tempat/entitas. Endpoint publik
+#          translate.google.com, jadi bisa kena rate-limit (maks 5
+#          request/detik menurut Google) kalau testing terlalu cepat
+#          beruntun, atau gagal kalau internet mati.
+# Lapis 2: MyMemoryTranslator (deep-translator, tanpa API key) - dicoba
+#          kalau Lapis 1 gagal. Pakai NAMA BAHASA LENGKAP ("indonesian"/
+#          "english"), bukan kode singkat ("id"/"en") - versi kode
+#          singkat sempat menyebabkan error "No support for the
+#          provided language" pada percobaan sebelumnya.
+# Lapis 3: MarianMT LOKAL (Helsinki-NLP/opus-mt) - jaring pengaman
+#          darurat kalau Lapis 1 DAN 2 dua-duanya gagal (mis. tidak ada
+#          internet sama sekali). Tidak akurat soal nama tempat/entitas
+#          (lihat riwayat pengujian sebelumnya), tapi tidak pernah gagal
+#          karena berjalan 100% lokal tanpa internet sama sekali.
+
+from deep_translator import GoogleTranslator, MyMemoryTranslator
+
+_TRANSLATE_RETRY_ATTEMPTS = 2
+_TRANSLATE_RETRY_DELAY_SEC = 1.5
+
+_MYMEMORY_LANG_NAMES = {
+    "id": "indonesian",
+    "en": "english",
+}
+
+
+def _translate_with_marianmt_fallback(
+    source_text: str,
+    direction: str
+) -> str:
+    if direction == "id-en":
+        inputs = mt_tokenizer_id_en(
+            source_text,
+            return_tensors="pt",
+            padding=True,
+        )
+        output = mt_model_id_en.generate(**inputs)
+        return mt_tokenizer_id_en.decode(
+            output[0],
+            skip_special_tokens=True,
+        ).strip()
+
+    inputs = mt_tokenizer_en_id(
+        source_text,
+        return_tensors="pt",
+        padding=True,
+    )
+    output = mt_model_en_id.generate(**inputs)
+    return mt_tokenizer_en_id.decode(
+        output[0],
+        skip_special_tokens=True,
+    ).strip()
+
 
 def _translate_text(
     source_text: str,
@@ -412,74 +477,62 @@ def _translate_text(
     ).strip()
 
     if not source_text:
-
         return ""
 
+    source_lang = "id" if direction == "id-en" else "en"
+    target_lang = "en" if direction == "id-en" else "id"
 
-    if direction == "id-en":
+    # ----- Lapis 1: GoogleTranslator (dengan retry) -----
+    for attempt in range(1, _TRANSLATE_RETRY_ATTEMPTS + 1):
+        try:
+            translated = GoogleTranslator(
+                source=source_lang,
+                target=target_lang,
+            ).translate(source_text)
 
-        inputs = mt_tokenizer_id_en(
-            source_text,
-            return_tensors="pt",
-            padding=True,
-        )
+            if translated:
+                return translated.strip()
 
-        output = mt_model_id_en.generate(
-            **inputs
-        )
-
-        return (
-            mt_tokenizer_id_en.decode(
-                output[0],
-                skip_special_tokens=True,
+        except Exception as e:
+            print(
+                f"[Lapis 1: GoogleTranslator gagal, percobaan "
+                f"{attempt}/{_TRANSLATE_RETRY_ATTEMPTS}] {e}"
             )
-            .strip()
+            if attempt < _TRANSLATE_RETRY_ATTEMPTS:
+                time.sleep(_TRANSLATE_RETRY_DELAY_SEC)
+
+    # ----- Lapis 2: MyMemoryTranslator (nama bahasa lengkap) -----
+    try:
+        translated = MyMemoryTranslator(
+            source=_MYMEMORY_LANG_NAMES[source_lang],
+            target=_MYMEMORY_LANG_NAMES[target_lang],
+        ).translate(source_text)
+
+        if translated:
+            print("[Lapis 2: fallback ke MyMemoryTranslator berhasil]")
+            return translated.strip()
+
+    except Exception as e:
+        print(f"[Lapis 2: MyMemoryTranslator juga gagal] {e}")
+
+    # ----- Lapis 3: MarianMT lokal (jaring pengaman darurat) -----
+    try:
+        translated = _translate_with_marianmt_fallback(
+            source_text,
+            direction,
         )
-
-
-    sentences = re.split(r"(?<=[.!?])\s+", source_text)
-    translated_sentences = []
-
-    for sentence in sentences:
-        if not sentence.strip():
-            continue
-
-        inputs = mt_tokenizer_en_id(
-            sentence,
-            return_tensors="pt",
-            padding=True,
+        print(
+            "[Lapis 3: fallback DARURAT ke MarianMT lokal berhasil - "
+            "kualitas nama tempat/entitas mungkin kurang akurat]"
         )
+        return translated
 
-        output = mt_model_en_id.generate(
-            **inputs,
-            num_beams=5,
-            do_sample=False,
-            length_penalty=1.0,
-            early_stopping=True,
-        )
+    except Exception as e:
+        print(f"[Lapis 3: MarianMT lokal juga gagal] {e}")
 
-        translated = mt_tokenizer_en_id.decode(
-            output[0],
-            skip_special_tokens=True,
-        ).strip()
-
-        # Marian menerjemahkan pertanyaan ini secara harfiah,
-        # padahal bentuk percakapan Indonesianya adalah idiom khusus.
-        # PENTING: pakai fullmatch (bukan search) pada kalimat yang sudah
-        # dinormalisasi, supaya patch ini HANYA berlaku kalau kalimatnya
-        # memang cuma pertanyaan pendek ini saja — bukan saat frasa ini
-        # nyempil di tengah kalimat yang lebih panjang (yang sebelumnya
-        # bikin sisa kalimat ikut terhapus/tertimpa).
-        normalized_sentence = sentence.strip().rstrip("?.!").lower()
-        if re.fullmatch(
-            r"which platform is (it|the train)",
-            normalized_sentence,
-        ):
-            translated = "Peron berapa?"
-
-        translated_sentences.append(translated)
-
-    return " ".join(translated_sentences).strip()
+    return (
+        "(Terjemahan gagal - coba rekam ulang beberapa saat lagi)"
+    )
 
 
 # ============================================================
@@ -517,8 +570,121 @@ def _generate_tts(
 
 
 # ============================================================
+# FILTER HALUSINASI WHISPER PADA AUDIO HENING/NOISE
+# ============================================================
+#
+# Whisper (termasuk model base "openai/whisper-small" yang dipakai untuk
+# arah en-id) dikenal luas kadang "menghalusinasi" kalimat penutup video
+# YouTube (mis. "Thank you for watching...") saat diberi audio yang
+# nyaris hening / hanya noise ambient (kipas, dengung mikrofon, dll),
+# karena model dilatih dari sangat banyak video YouTube. Pengecekan
+# RMS/peak amplitude di route /translate tidak selalu menangkap ini,
+# karena noise ambient bisa saja tetap di atas ambang batas tersebut
+# walau bukan ucapan sungguhan.
+#
+# Mitigasi: cek apakah HASIL TRANSKRIPSI, setelah dinormalisasi (huruf
+# kecil, tanda baca dibuang), fullmatch salah satu pola halusinasi yang
+# umum diketahui. Pakai fullmatch (bukan search) supaya HANYA menangkap
+# kalau kalimatnya memang persis pola halusinasi itu - bukan kalimat
+# sungguhan yang kebetulan menyinggung kata sejenis.
+_HALLUCINATION_FULL_PATTERNS = [
+    r"thank(s| you)( so much)? for watching"
+    r"( don t forget to (like )?(share )?and subscribe)?",
+    r"please (like )?(share )?and subscribe",
+    r"don t forget to (like )?(share )?and subscribe",
+    r"see you (in the )?next (video|time)",
+    r"terima kasih (sudah |telah )?menonton",
+    r"jangan lupa (like|subscribe|follow)( dan (like|subscribe|follow))*",
+]
+
+
+def _normalize_for_hallucination_check(text: str) -> str:
+    text = text.lower()
+    text = re.sub(r"[^\w\s]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _looks_like_whisper_hallucination(text: str) -> bool:
+    normalized = _normalize_for_hallucination_check(text)
+
+    if not normalized:
+        return False
+
+    for pattern in _HALLUCINATION_FULL_PATTERNS:
+        if re.fullmatch(pattern, normalized):
+            return True
+
+    return False
+
+
+# ============================================================
 # ASR HELPER
 # ============================================================
+
+# ============================================================
+# PERBAIKAN KATA YANG "NEMPEL" (PREPOSISI + NAMA TEMPAT)
+# ============================================================
+#
+# Whisper (termasuk model fine-tuned untuk id) kadang menggabungkan
+# preposisi dengan nama tempat setelahnya jadi satu kata kalau diucapkan
+# tanpa jeda jelas (mis. "ke bandung" -> "kebandung"). Ini murni
+# perilaku decoding model berdasarkan confidence akustik saat itu,
+# BUKAN sesuatu yang bisa dikontrol langsung lewat kode - tapi karena
+# pola nama tempat pada skenario demo sudah diketahui, kita bisa
+# perbaiki lewat pencocokan teks sesudah ASR selesai.
+#
+# INI HANYA STRING MATCHING BIASA (tidak menyentuh model AI sama sekali),
+# jadi risikonya jauh lebih rendah dibanding percobaan proteksi token
+# sebelumnya yang gagal. Tambahkan nama tempat lain di
+# _KNOWN_PLACES_FOR_SPACING_FIX sesuai skenario demo Anda.
+_PREPOSITION_PLACE_FIX_PREFIXES = ["ke", "di", "dari", "menuju"]
+
+_KNOWN_PLACES_FOR_SPACING_FIX = [
+    "bandung", "jakarta", "surabaya", "yogyakarta", "semarang",
+    "medan", "makassar", "palembang", "denpasar", "malang",
+    "bogor", "bekasi", "bali",
+]
+
+
+def _fix_merged_preposition_place_names(text: str) -> str:
+    for prefix in _PREPOSITION_PLACE_FIX_PREFIXES:
+        for place in _KNOWN_PLACES_FOR_SPACING_FIX:
+            merged = f"{prefix}{place}"
+            pattern = re.compile(
+                r"\b" + re.escape(merged) + r"\b",
+                re.IGNORECASE,
+            )
+            text = pattern.sub(f"{prefix} {place}", text)
+    return text
+
+
+# ============================================================
+# PERAPIAN RINGAN OUTPUT ASR (KHUSUS ARAH id-en)
+# ============================================================
+#
+# Model Whisper HASIL FINE-TUNING (dipakai untuk arah id-en) cenderung
+# tidak menghasilkan tanda baca sama sekali - kemungkinan besar karena
+# data training fine-tuning-nya juga tidak memakai tanda baca. Model
+# Inggris (base, tidak di-fine-tune) tidak mengalami ini.
+#
+# Perbaikan PENUH (koma, tanda tanya di tengah kalimat) butuh model
+# punctuation-restoration terpisah atau retraining ulang - di luar
+# scope perbaikan cepat ini. Fungsi ini HANYA kapitalisasi huruf
+# pertama + titik di akhir kalau belum ada.
+def _light_punctuation_cleanup(text: str) -> str:
+    text = text.strip()
+
+    if not text:
+        return text
+
+    text = text[0].upper() + text[1:]
+
+    if text[-1] not in ".!?":
+        text += "."
+
+    return text
+
 
 def _run_asr(
     signal: np.ndarray,
@@ -564,7 +730,13 @@ def _run_asr(
         ""
     )
 
-    return text.strip()
+    text = text.strip()
+
+    if direction == "id-en":
+        text = _fix_merged_preposition_place_names(text)
+        text = _light_punctuation_cleanup(text)
+
+    return text
 
 
 # ============================================================
@@ -981,6 +1153,17 @@ def translate():
         )
 
 
+        if _looks_like_whisper_hallucination(source_text):
+
+            return jsonify({
+                "error": (
+                    "Tidak ada ucapan yang terdeteksi. "
+                    "Coba rekam ulang sambil berbicara "
+                    "dengan jelas."
+                )
+            }), 400
+
+
         # ====================================================
         # TRANSLATION
         # ====================================================
@@ -1092,7 +1275,7 @@ def translate():
         # RESPONSE
         # ====================================================
 
-        return jsonify({
+        response_data = jsonify({
 
             # ------------------------------------------------
             # TEKS
@@ -1264,6 +1447,21 @@ def translate():
             "comparison": comparison,
 
         })
+
+        print()
+        print("-" * 50)
+        print("BREAKDOWN WAKTU PROSES (detik):")
+        print(f"  VAD              : {t_vad:.3f}")
+        print(f"  Wav2Vec2         : {t_wav2vec:.3f}")
+        print(f"  NDTW             : {t_ndtw:.3f}")
+        print(f"  ASR (Whisper)    : {t_asr:.3f}")
+        print(f"  MT (Translate)   : {t_mt:.3f}")
+        print(f"  TTS              : {t_tts:.3f}")
+        print(f"  TOTAL            : {total_time:.3f}")
+        print("-" * 50)
+        print()
+
+        return response_data
 
 
     except Exception as exc:
