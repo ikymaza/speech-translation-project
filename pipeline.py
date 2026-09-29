@@ -12,6 +12,8 @@ biasanya dipakai lewat model pretrained/fine-tuned (mis. MarianMT,
 NLLB, atau model custom kamu sendiri). Lihat catatan di README.md
 bagian "Menyambungkan ke Transformer".
 
+Rancangan konseptual; belum diimplementasikan, lihat keterbatasan". Risikonya sangat kecil karena ini hanya komentar
+
 Juga mencatat T_inference (2.2.10 poin 3a) untuk keperluan pengukuran RTF:
 T_inference di modul ini = waktu VAD + waktu ekstraksi fitur + waktu NDTW
 (BELUM termasuk waktu decoding Transformer -- tambahkan sendiri saat
